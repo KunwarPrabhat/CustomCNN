@@ -1,7 +1,7 @@
 #include <iostream>
 #include "nn/Model.h"
-#include "layers/Dense.h"
-#include "layers/ReLU.h"
+#include "Layers/Dense.h"
+#include "Layers/ReLU.h"
 
 int main() {
     Model model;

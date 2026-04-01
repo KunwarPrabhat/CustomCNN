@@ -1,6 +1,7 @@
 #pragma once
 #include <vector>
-#include "../layers/Layer.h"
+#include "../Layers/Layer.h"
+#include "../core/Tensor.h"
 
 class Model {
 private:
