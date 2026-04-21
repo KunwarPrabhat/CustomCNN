@@ -16,5 +16,5 @@ public:
 
     Adam(float lr = 0.001f, float b1 = 0.9f, float b2 = 0.999f, float eps = 1e-8f);
 
-    void step(std::vector<Layer*>& layers) override;
+    void step(std::vector<std::shared_ptr<Layer>>& layers) override;
 };

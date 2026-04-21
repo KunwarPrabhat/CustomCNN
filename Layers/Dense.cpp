@@ -15,6 +15,7 @@ Tensor Dense::forward(const Tensor& input) {
     Tensor output(batches, output_size);
     output.fill(0.0f);
 
+    #pragma omp parallel for
     for (int b = 0; b < batches; ++b) {
         for (int j = 0; j < output_size; ++j) {
             float sum = biases(0, j);
@@ -33,17 +34,32 @@ Tensor Dense::backward(const Tensor& grad_output) {
     Tensor d_input(batches, input_size);
     d_input.fill(0.0f);
 
+    // 1. Compute d_input safely over batches
+    #pragma omp parallel for
     for (int b = 0; b < batches; ++b) {
-        for (int j = 0; j < output_size; ++j) {
-            float g = grad_output(b, j);
+        for (int k = 0; k < input_size; ++k) {
+            float sum = 0.0f;
+            for (int j = 0; j < output_size; ++j) {
+                sum += weights(k, j) * grad_output(b, j);
+            }
+            d_input(b, k) = sum;
+        }
+    }
 
-            biases.grad[j] += g; 
+    // 2. Compute parameter gradients safely over output features (avoids atomic locks)
+    #pragma omp parallel for
+    for (int j = 0; j < output_size; ++j) {
+        float b_grad = 0.0f;
+        for (int b = 0; b < batches; ++b) {
+            float g = grad_output(b, j);
+            b_grad += g;
 
             for (int k = 0; k < input_size; ++k) {
-                weights.grad[weights.get_index(k, j)] += cached_input(b, k) * g;
-                d_input(b, k) += weights(k, j) * g;
+                float dw = cached_input(b, k) * g;
+                weights.grad[weights.get_index(k, j)] += dw; 
             }
         }
+        biases.grad[j] += b_grad; 
     }
 
     return d_input;

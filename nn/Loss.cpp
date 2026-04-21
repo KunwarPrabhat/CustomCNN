@@ -9,6 +9,7 @@ float MSELoss::forward(const Tensor& preds, const Tensor& targets) {
     int N = preds.shape[0];
     int size = preds.size();
 
+    #pragma omp parallel for reduction(+:loss)
     for (int i = 0; i < size; ++i) {
         float diff = preds.data[i] - targets.data[i];
         loss += diff * diff;
@@ -33,6 +34,7 @@ float CrossEntropyLoss::forward(const Tensor& preds, const Tensor& targets) {
     int C = preds.shape[1];
     float loss = 0.0f;
 
+    #pragma omp parallel for reduction(+:loss)
     for (int i = 0; i < N; ++i) {
         // Find max for numeric stability
         float max_val = -std::numeric_limits<float>::infinity();

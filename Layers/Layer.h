@@ -1,30 +1,44 @@
 #pragma once
 #include "../core/Tensor.h"
+#include <vector>
+#include <memory>
+#include <stdexcept>
 
 class Layer {
 public:
     virtual ~Layer() = default;
 
-    virtual Tensor forward(const Tensor& input) = 0;
-    virtual Tensor backward(const Tensor& grad_output) = 0;
+    std::vector<std::shared_ptr<Layer>> input_nodes;
+    std::vector<std::shared_ptr<Layer>> output_nodes;
+
+    Tensor output_cache;
+    Tensor grad_cache;
+    Tensor cached_input;
+    bool has_grad_cache = false;
+
+    virtual Tensor forward(const Tensor& input) {
+        throw std::runtime_error("Single-input forward not implemented for this layer.");
+    }
     
-    // Default empty implementation for layers without parameters (e.g. ReLU, MaxPool)
+    virtual Tensor backward(const Tensor& grad_output) {
+        throw std::runtime_error("Single-input backward not implemented for this layer.");
+    }
+
+    virtual Tensor forward(const std::vector<Tensor>& inputs) {
+        if (inputs.size() == 1) return forward(inputs[0]);
+        throw std::runtime_error("This layer does not support multiple topological inputs.");
+    }
+
+    virtual std::vector<Tensor> backward_multi(const Tensor& grad_output) {
+        return {backward(grad_output)};
+    }
+    
     virtual void update_weights(float learning_rate) {}
-
-protected:
-    Tensor cached_input; // Used to store input during forward pass to compute gradients in backward pass
-
-public:
-    bool is_training = true;
     
+    bool is_training = true;
     virtual void train() { is_training = true; }
     virtual void eval() { is_training = false; }
     
-    virtual std::vector<Tensor*> get_parameters() {
-        return {}; // Return empty by default
-    }
-
-    virtual std::vector<Tensor*> get_states() {
-        return get_parameters(); // Most layers just need their parameters saved
-    }
+    virtual std::vector<Tensor*> get_parameters() { return {}; }
+    virtual std::vector<Tensor*> get_states() { return get_parameters(); }
 };

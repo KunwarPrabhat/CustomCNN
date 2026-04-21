@@ -4,9 +4,9 @@
 Adam::Adam(float lr, float b1, float b2, float eps) 
     : learning_rate(lr), beta1(b1), beta2(b2), epsilon(eps), t(0) {}
 
-void Adam::step(std::vector<Layer*>& layers) {
+void Adam::step(std::vector<std::shared_ptr<Layer>>& layers) {
     t++;
-    for (auto layer : layers) {
+    for (auto& layer : layers) {
         std::vector<Tensor*> params = layer->get_parameters();
         for (Tensor* param : params) {
             // Initialize moments if empty
