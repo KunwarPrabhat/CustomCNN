@@ -8,24 +8,24 @@ int main() {
     Model model;
     
     // First Block: Conv -> BatchNorm2D -> LeakyReLU -> Pool
-    model << std::make_shared<Conv2D>(3, 8, 3, 1, 1) // Support 3 channel RGB input
-          << std::make_shared<BatchNorm2D>(8)
-          << std::make_shared<LeakyReLU>(0.01f)
-          << std::make_shared<MaxPool2D>(2, 2);
+    model << conv2d(3, 8, 3, 1, 1) // Support 3 channel RGB input
+          << batchnorm2d(8)
+          << leaky_relu(0.01f)
+          << maxpool2d(2, 2);
     
     // Second Block: Conv -> BatchNorm2D -> LeakyReLU -> Pool
-    model << std::make_shared<Conv2D>(8, 16, 3, 1, 1)
-          << std::make_shared<BatchNorm2D>(16)
-          << std::make_shared<LeakyReLU>(0.01f)
-          << std::make_shared<MaxPool2D>(2, 2);
+    model << conv2d(8, 16, 3, 1, 1)
+          << batchnorm2d(16)
+          << leaky_relu(0.01f)
+          << maxpool2d(2, 2);
     
-    model << std::make_shared<Flatten>();
+    model << flatten();
     
     // Final Layers: Dense -> Dropout -> LeakyReLU -> Dense
-    model << std::make_shared<Dense>(784, 64)
-          << std::make_shared<Dropout>(0.5f)
-          << std::make_shared<LeakyReLU>(0.01f)
-          << std::make_shared<Dense>(64, 10);
+    model << dense(784, 64)
+          << dropout(0.5f)
+          << leaky_relu(0.01f)
+          << dense(64, 10);
     
     CrossEntropyLoss criterion;
     Adam optimizer(0.001f);
@@ -71,19 +71,19 @@ int main() {
 
     // Test Serialization by loading into a new identical model structure
     Model model2;
-    model2 << std::make_shared<Conv2D>(3, 8, 3, 1, 1) // Wait, input channels is 3 for RGB!
-           << std::make_shared<BatchNorm2D>(8)
-           << std::make_shared<LeakyReLU>(0.01f)
-           << std::make_shared<MaxPool2D>(2, 2)
-           << std::make_shared<Conv2D>(8, 16, 3, 1, 1) 
-           << std::make_shared<BatchNorm2D>(16)
-           << std::make_shared<LeakyReLU>(0.01f)
-           << std::make_shared<MaxPool2D>(2, 2)
-           << std::make_shared<Flatten>()
-           << std::make_shared<Dense>(784, 64) 
-           << std::make_shared<Dropout>(0.5f)
-           << std::make_shared<LeakyReLU>(0.01f)
-           << std::make_shared<Dense>(64, 10);
+    model2 << conv2d(3, 8, 3, 1, 1) // Wait, input channels is 3 for RGB!
+           << batchnorm2d(8)
+           << leaky_relu(0.01f)
+           << maxpool2d(2, 2)
+           << conv2d(8, 16, 3, 1, 1) 
+           << batchnorm2d(16)
+           << leaky_relu(0.01f)
+           << maxpool2d(2, 2)
+           << flatten()
+           << dense(784, 64) 
+           << dropout(0.5f)
+           << leaky_relu(0.01f)
+           << dense(64, 10);
 
     std::cout << "Loading Model from test_model.bin..." << std::endl;
     model2.load("test_model.bin");

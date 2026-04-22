@@ -29,10 +29,10 @@ void test_dag(){
     std::cout<<"\n=== 2. DAG & Architectural Logic ===\n";
 
     // Kahn topological sort: A→B, A→C, B+C→Add
-    auto A=std::make_shared<Dense>(4,4);
-    auto B=std::make_shared<Dense>(4,4);
-    auto C=std::make_shared<Dense>(4,4);
-    auto Add=std::make_shared<ElementwiseAdd>();
+    auto A=dense(4,4);
+    auto B=dense(4,4);
+    auto C=dense(4,4);
+    auto Add=elementwise_add();
     Model dag;
     dag.add_node(A); dag.add_node(B); dag.add_node(C); dag.add_node(Add);
     dag.connect(A,B); dag.connect(A,C); dag.connect(B,Add); dag.connect(C,Add);
@@ -77,7 +77,7 @@ void test_math(){
         float mh=m_/(1-b1), vh=v_/(1-b2);
         float expected=lr*mh/(std::sqrt(vh)+eps);
 
-        auto layer=std::make_shared<Dense>(1,1);
+        auto layer=dense(1,1);
         layer->weights.data[0]=0.5f; layer->weights.grad[0]=g;
         float w0=layer->weights.data[0];
         std::vector<std::shared_ptr<Layer>> ls={layer};
@@ -175,11 +175,11 @@ void test_production(){
 
     // Serialization round-trip
     {
-        auto layer=std::make_shared<Dense>(4,4);
+        auto layer=dense(4,4);
         for(int i=0;i<layer->weights.size();++i) layer->weights.data[i]=(float)i*0.01f;
         for(int i=0;i<layer->biases.size();++i)  layer->biases.data[i] =(float)i*0.1f;
         Model m1; m1.add_node(layer); m1.build_graph(); m1.save("_rt.bin");
-        auto l2=std::make_shared<Dense>(4,4);
+        auto l2=dense(4,4);
         Model m2; m2.add_node(l2); m2.build_graph(); m2.load("_rt.bin");
         bool ok=true;
         for(int i=0;i<layer->weights.size();++i)
