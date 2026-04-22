@@ -16,78 +16,133 @@ public:
         biases.fill(0.1f);
     }
 
-    inline Tensor forward(const Tensor& input) override {
-        cached_input = input;
-        const int N = input.shape[0];
-        Tensor output(N, output_size);
+    inline void compile(const std::vector<std::vector<int>>& input_shapes) override {
+        const int N = input_shapes[0][0];
+        output_buffer = Tensor(N, output_size);
+        grad_input_buffer = Tensor(input_shapes[0]);
+    }
 
+    inline void forward(const Tensor& input) override {
+        cached_input_ptr = &input;
+        const int N = input.shape[0];
+        const int K = input_size;
+        const int M = output_size;
+        
         const float* inp = input.data.data();
         const float* W   = weights.data.data();
         const float* b   = biases.data.data();
-        float*       out = output.data.data();
+        float*       out = output_buffer.data.data();
+        
+        constexpr int BLOCK_SIZE = 64;
 
         #pragma omp parallel for schedule(static)
-        for (int n = 0; n < N; ++n) {
-            std::span<const float> x_row(inp + n*input_size, input_size);
-            std::span<float>       o_row(out + n*output_size, output_size);
-            for (int j = 0; j < output_size; ++j) {
-                float acc = b[j];
-                std::span<const float> w_col(W + j, 1); // stride trick not needed; manual below
-                const float* w_ptr = W + j; // weights[k][j] stored col-major? No, row-major: W[k*out+j]
-                // weights shape: (in_size, out_size) → W[k*output_size + j]
-                const float* wj = W; // base
-                #pragma omp simd reduction(+:acc)
-                for (int k = 0; k < input_size; ++k)
-                    acc += x_row[k] * wj[k*output_size + j];
-                o_row[j] = acc;
+        for (int i = 0; i < N; ++i) {
+            float* o_row = out + i * M;
+            #pragma omp simd
+            for (int j = 0; j < M; ++j) {
+                o_row[j] = b[j];
             }
         }
-        return output;
+
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int i0 = 0; i0 < N; i0 += BLOCK_SIZE) {
+            for (int j0 = 0; j0 < M; j0 += BLOCK_SIZE) {
+                int i_max = std::min(i0 + BLOCK_SIZE, N);
+                int j_max = std::min(j0 + BLOCK_SIZE, M);
+                
+                for (int k0 = 0; k0 < K; k0 += BLOCK_SIZE) {
+                    int k_max = std::min(k0 + BLOCK_SIZE, K);
+                    
+                    for (int i = i0; i < i_max; ++i) {
+                        float* o_row = out + i * M;
+                        const float* i_row = inp + i * K;
+                        for (int k = k0; k < k_max; ++k) {
+                            float val = i_row[k];
+                            const float* w_row = W + k * M;
+                            #pragma omp simd
+                            for (int j = j0; j < j_max; ++j) {
+                                o_row[j] += val * w_row[j];
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
-    inline Tensor backward(const Tensor& grad_output) override {
+    inline void backward(const Tensor& grad_output) override {
         const int N = grad_output.shape[0];
-        Tensor d_input(N, input_size);
+        const int K = input_size;
+        const int M = output_size;
 
-        const float* inp = cached_input.data.data();
+        const float* inp = cached_input_ptr->data.data();
         const float* go  = grad_output.data.data();
         const float* W   = weights.data.data();
-        float*       di  = d_input.data.data();
+        float*       di  = grad_input_buffer.data.data();
         float*       dW  = weights.grad.data();
         float*       db  = biases.grad.data();
+        
+        grad_input_buffer.fill(0.0f);
+        constexpr int BLOCK_SIZE = 64;
 
-        // d_input = grad_output @ W^T
-        #pragma omp parallel for schedule(static)
-        for (int n = 0; n < N; ++n) {
-            std::span<const float> go_row(go  + n*output_size, output_size);
-            std::span<float>       di_row(di  + n*input_size,  input_size);
-            for (int k = 0; k < input_size; ++k) {
-                float acc = 0.0f;
-                #pragma omp simd reduction(+:acc)
-                for (int j = 0; j < output_size; ++j)
-                    acc += W[k*output_size + j] * go_row[j];
-                di_row[k] = acc;
+        // di = go @ W^T
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int i0 = 0; i0 < N; i0 += BLOCK_SIZE) {
+            for (int k0 = 0; k0 < K; k0 += BLOCK_SIZE) {
+                int i_max = std::min(i0 + BLOCK_SIZE, N);
+                int k_max = std::min(k0 + BLOCK_SIZE, K);
+                for (int j0 = 0; j0 < M; j0 += BLOCK_SIZE) {
+                    int j_max = std::min(j0 + BLOCK_SIZE, M);
+                    for (int i = i0; i < i_max; ++i) {
+                        float* di_row = di + i * K;
+                        const float* go_row = go + i * M;
+                        for (int k = k0; k < k_max; ++k) {
+                            const float* w_row = W + k * M;
+                            float acc = 0.0f;
+                            #pragma omp simd reduction(+:acc)
+                            for (int j = j0; j < j_max; ++j) {
+                                acc += go_row[j] * w_row[j];
+                            }
+                            di_row[k] += acc;
+                        }
+                    }
+                }
             }
         }
 
-        // dW and db
-        #pragma omp parallel for schedule(static)
-        for (int k = 0; k < input_size; ++k) {
-            for (int j = 0; j < output_size; ++j) {
-                float acc = 0.0f;
-                #pragma omp simd reduction(+:acc)
-                for (int n = 0; n < N; ++n)
-                    acc += inp[n*input_size + k] * go[n*output_size + j];
-                dW[k*output_size + j] += acc;
+        // dW = inp^T @ go
+        #pragma omp parallel for collapse(2) schedule(static)
+        for (int k0 = 0; k0 < K; k0 += BLOCK_SIZE) {
+            for (int j0 = 0; j0 < M; j0 += BLOCK_SIZE) {
+                int k_max = std::min(k0 + BLOCK_SIZE, K);
+                int j_max = std::min(j0 + BLOCK_SIZE, M);
+                for (int i0 = 0; i0 < N; i0 += BLOCK_SIZE) {
+                    int i_max = std::min(i0 + BLOCK_SIZE, N);
+                    for (int k = k0; k < k_max; ++k) {
+                        float* dw_row = dW + k * M;
+                        for (int i = i0; i < i_max; ++i) {
+                            float val = inp[i * K + k]; // inp^T
+                            const float* go_row = go + i * M;
+                            #pragma omp simd
+                            for (int j = j0; j < j_max; ++j) {
+                                dw_row[j] += val * go_row[j];
+                            }
+                        }
+                    }
+                }
             }
         }
-        for (int j = 0; j < output_size; ++j) {
+
+        // db = sum(go)
+        #pragma omp parallel for schedule(static)
+        for (int j = 0; j < M; ++j) {
             float acc = 0.0f;
             #pragma omp simd reduction(+:acc)
-            for (int n = 0; n < N; ++n) acc += go[n*output_size + j];
+            for (int i = 0; i < N; ++i) {
+                acc += go[i * M + j];
+            }
             db[j] += acc;
         }
-        return d_input;
     }
 
     inline void update_weights(float lr) override {

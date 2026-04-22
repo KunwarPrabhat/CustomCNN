@@ -24,6 +24,7 @@
 #include "Layers/Dropout.h"
 #include "Layers/Concat.h"
 #include "Layers/ElementwiseAdd.h"
+#include "Layers/FusedConvBNReLU.h"
 
 // Data Processing Pipeline
 #include "data/DataLoader.h"
@@ -78,6 +79,10 @@ inline std::shared_ptr<Concat> concat() {
 
 inline std::shared_ptr<ElementwiseAdd> elementwise_add() {
     return std::make_shared<ElementwiseAdd>();
+}
+
+inline std::shared_ptr<FusedConvBNReLU> fused_conv_bn_relu(int in_channels, int out_channels, int kernel_size, int stride = 1, int padding = 0, float momentum = 0.1f, float eps = 1e-5f) {
+    return std::make_shared<FusedConvBNReLU>(in_channels, out_channels, kernel_size, stride, padding, momentum, eps);
 }
 
 } // namespace MetalNet

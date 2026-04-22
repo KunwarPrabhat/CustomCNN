@@ -53,72 +53,118 @@ public:
         child->add_extra_input_source(parent);
     }
 
-    inline Tensor forward(const Tensor& input) {
+    inline void compile(const std::vector<int>& primary_input_shape) {
         if (layers.empty()) build_graph();
         for (auto& layer : layers) {
-            std::vector<Tensor> ins;
+            std::vector<std::vector<int>> input_shapes;
             if (layer->input_nodes.empty()) {
-                ins.push_back(input);
+                input_shapes.push_back(primary_input_shape);
+            } else {
+                for (auto& p : layer->input_nodes)
+                    input_shapes.push_back(p->output_buffer.shape);
+            }
+            for (auto& p : layer->extra_input_nodes) {
+                input_shapes.push_back(p->output_buffer.shape);
+            }
+            
+            layer->compile(input_shapes);
+
+            if (!layer->extra_input_nodes.empty()) {
+                layer->temp_add_buffer = Tensor(input_shapes[0]);
+            }
+            layer->grad_output_buffer = Tensor(layer->output_buffer.shape);
+        }
+    }
+
+    inline void forward(const Tensor& input) {
+        if (layers.empty()) return;
+        for (auto& layer : layers) {
+            std::vector<const Tensor*> ins;
+            if (layer->input_nodes.empty()) {
+                ins.push_back(&input);
             } else {
                 for (auto& n : layer->input_nodes)
-                    ins.push_back(n->output_cache);
+                    ins.push_back(&n->output_buffer);
             }
             
             layer->extra_inputs.clear();
             for (auto& en : layer->extra_input_nodes) {
-                layer->extra_inputs.push_back(en->output_cache);
+                layer->extra_inputs.push_back(&en->output_buffer);
             }
 
             if (!layer->extra_inputs.empty() && !ins.empty()) {
-                Tensor combined_input = ins[0];
-                for (const auto& ei : layer->extra_inputs) {
-                    float* d = combined_input.data.data();
-                    const float* s = ei.data.data();
-                    int sz = combined_input.size();
+                const Tensor* primary = ins[0];
+                Tensor& comb = layer->temp_add_buffer;
+                float* d = comb.data.data();
+                const float* p = primary->data.data();
+                int sz = comb.size();
+                #pragma omp simd
+                for (int i=0; i<sz; ++i) d[i] = p[i];
+
+                for (const auto* ei : layer->extra_inputs) {
+                    const float* s = ei->data.data();
                     #pragma omp simd
                     for (int i=0; i<sz; ++i) d[i] += s[i];
                 }
-                ins[0] = combined_input;
+                ins[0] = &comb;
             }
             
-            layer->output_cache = layer->forward(ins);
+            layer->forward(ins);
         }
-        return layers.back()->output_cache;
     }
 
     inline void backward(const Tensor& grad_output) {
         for (auto& layer : layers) layer->has_grad_cache = false;
-        layers.back()->grad_cache    = grad_output;
+        
+        float* dst = layers.back()->grad_output_buffer.data.data();
+        const float* src = grad_output.data.data();
+        int sz = grad_output.size();
+        #pragma omp simd
+        for (int k=0; k<sz; ++k) dst[k] = src[k];
         layers.back()->has_grad_cache = true;
 
         for (int i = (int)layers.size() - 1; i >= 0; --i) {
             auto& layer  = layers[i];
-            auto  grads  = layer->backward_multi(layer->grad_cache);
+            
+            layer->backward_multi(layer->grad_output_buffer);
+
             for (size_t j = 0; j < layer->input_nodes.size(); ++j) {
                 auto& parent = layer->input_nodes[j];
+                const Tensor& grad_to_pass = (layer->input_nodes.size() == 1) ? layer->grad_input_buffer : layer->multi_grad_input_buffers[j];
+
                 if (!parent->has_grad_cache) {
-                    parent->grad_cache    = grads[j];
+                    float* pdst = parent->grad_output_buffer.data.data();
+                    const float* psrc = grad_to_pass.data.data();
+                    int psz = parent->grad_output_buffer.size();
+                    #pragma omp simd
+                    for (int k = 0; k < psz; ++k) pdst[k] = psrc[k];
                     parent->has_grad_cache = true;
                 } else {
-                    // Accumulate gradients from multiple downstream paths (skip connections)
-                    float*       dst = parent->grad_cache.data.data();
-                    const float* src = grads[j].data.data();
-                    int          sz  = parent->grad_cache.size();
+                    float* pdst = parent->grad_output_buffer.data.data();
+                    const float* psrc = grad_to_pass.data.data();
+                    int psz = parent->grad_output_buffer.size();
                     #pragma omp simd
-                    for (int k = 0; k < sz; ++k) dst[k] += src[k];
+                    for (int k = 0; k < psz; ++k) pdst[k] += psrc[k];
                 }
             }
+
             for (size_t j = 0; j < layer->extra_input_nodes.size(); ++j) {
                 auto& extra_parent = layer->extra_input_nodes[j];
+                const Tensor& grad_to_pass = layer->grad_input_buffer;
+
                 if (!extra_parent->has_grad_cache) {
-                    extra_parent->grad_cache    = grads[0];
+                    float* pdst = extra_parent->grad_output_buffer.data.data();
+                    const float* psrc = grad_to_pass.data.data();
+                    int psz = extra_parent->grad_output_buffer.size();
+                    #pragma omp simd
+                    for (int k = 0; k < psz; ++k) pdst[k] = psrc[k];
                     extra_parent->has_grad_cache = true;
                 } else {
-                    float*       dst = extra_parent->grad_cache.data.data();
-                    const float* src = grads[0].data.data();
-                    int          sz  = extra_parent->grad_cache.size();
+                    float* pdst = extra_parent->grad_output_buffer.data.data();
+                    const float* psrc = grad_to_pass.data.data();
+                    int psz = extra_parent->grad_output_buffer.size();
                     #pragma omp simd
-                    for (int k = 0; k < sz; ++k) dst[k] += src[k];
+                    for (int k = 0; k < psz; ++k) pdst[k] += psrc[k];
                 }
             }
         }

@@ -9,13 +9,20 @@ public:
     int pool_size, stride;
     inline MaxPool2D(int p, int s=2) : pool_size(p), stride(s) {}
 
-    inline Tensor forward(const Tensor& input) override {
-        cached_input = input;
+    inline void compile(const std::vector<std::vector<int>>& input_shapes) override {
+        const int N = input_shapes[0][0], C = input_shapes[0][1];
+        const int H = input_shapes[0][2], W = input_shapes[0][3];
+        const int OH = (H - pool_size) / stride + 1, OW = (W - pool_size) / stride + 1;
+        output_buffer = Tensor(N, C, OH, OW);
+        grad_input_buffer = Tensor(input_shapes[0]);
+    }
+
+    inline void forward(const Tensor& input) override {
+        cached_input_ptr = &input;
         const int N=input.shape[0],C=input.shape[1],H=input.shape[2],W=input.shape[3];
-        const int OH=(H-pool_size)/stride+1, OW=(W-pool_size)/stride+1;
-        Tensor output(N,C,OH,OW);
+        const int OH=output_buffer.shape[2], OW=output_buffer.shape[3];
         const float* src = input.data.data();
-        float*       dst = output.data.data();
+        float*       dst = output_buffer.data.data();
         #pragma omp parallel for collapse(2) schedule(static)
         for (int n=0;n<N;++n) for (int c=0;c<C;++c) {
             const float* sc = src + n*(C*H*W) + c*(H*W);
@@ -29,17 +36,16 @@ public:
                 dc[y*OW+x] = mv;
             }
         }
-        return output;
     }
 
-    inline Tensor backward(const Tensor& go) override {
-        const int N=cached_input.shape[0],C=cached_input.shape[1];
-        const int H=cached_input.shape[2],W=cached_input.shape[3];
+    inline void backward(const Tensor& go) override {
+        const int N=cached_input_ptr->shape[0],C=cached_input_ptr->shape[1];
+        const int H=cached_input_ptr->shape[2],W=cached_input_ptr->shape[3];
         const int OH=go.shape[2], OW=go.shape[3];
-        Tensor d_in(cached_input.shape); d_in.fill(0.0f);
-        const float* src = cached_input.data.data();
+        grad_input_buffer.fill(0.0f);
+        const float* src = cached_input_ptr->data.data();
         const float* g   = go.data.data();
-        float*       di  = d_in.data.data();
+        float*       di  = grad_input_buffer.data.data();
         #pragma omp parallel for collapse(2) schedule(static)
         for (int n=0;n<N;++n) for (int c=0;c<C;++c) {
             const float* sc = src + n*(C*H*W) + c*(H*W);
@@ -54,7 +60,6 @@ public:
                 dc[my*W+mx] += gc[y*OW+x];
             }
         }
-        return d_in;
     }
 };
 

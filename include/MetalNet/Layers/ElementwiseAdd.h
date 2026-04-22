@@ -6,21 +6,35 @@ namespace MetalNet {
 
 class ElementwiseAdd : public Layer {
 public:
-    inline Tensor forward(const std::vector<Tensor>& inputs) override {
-        if (inputs.size()<2) throw std::runtime_error("ElementwiseAdd: needs >=2 inputs");
-        Tensor out = inputs[0];
-        float* d = out.data.data();
-        for (size_t i=1;i<inputs.size();++i) {
-            const float* s=inputs[i].data.data();
-            #pragma omp simd
-            for (int j=0;j<out.size();++j) d[j]+=s[j];
+    inline void compile(const std::vector<std::vector<int>>& input_shapes) override {
+        if (input_shapes.size()<2) throw std::runtime_error("ElementwiseAdd: needs >=2 inputs");
+        output_buffer = Tensor(input_shapes[0]);
+        multi_grad_input_buffers.clear();
+        for (size_t i=0; i<input_shapes.size(); ++i) {
+            multi_grad_input_buffers.push_back(Tensor(input_shapes[i]));
         }
-        return out;
     }
-    inline std::vector<Tensor> backward_multi(const Tensor& go) override {
-        std::vector<Tensor> grads;
-        for (size_t i=0;i<input_nodes.size();++i) grads.push_back(go);
-        return grads;
+
+    inline void forward(const std::vector<const Tensor*>& inputs) override {
+        float* d = output_buffer.data.data();
+        const float* s0=inputs[0]->data.data();
+        #pragma omp simd
+        for (int j=0;j<output_buffer.size();++j) d[j]=s0[j];
+        
+        for (size_t i=1;i<inputs.size();++i) {
+            const float* s=inputs[i]->data.data();
+            #pragma omp simd
+            for (int j=0;j<output_buffer.size();++j) d[j]+=s[j];
+        }
+    }
+
+    inline void backward_multi(const Tensor& go) override {
+        const float* g=go.data.data();
+        for (size_t i=0; i<multi_grad_input_buffers.size(); ++i) {
+            float* d = multi_grad_input_buffers[i].data.data();
+            #pragma omp simd
+            for (int j=0; j<go.size(); ++j) d[j] = g[j];
+        }
     }
 };
 

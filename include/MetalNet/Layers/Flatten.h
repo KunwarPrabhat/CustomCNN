@@ -5,18 +5,22 @@ namespace MetalNet {
 
 class Flatten : public Layer {
 public:
-    inline Tensor forward(const Tensor& input) override {
-        cached_input = input;
-        int N=input.shape[0], fd=1;
-        for (int i=1;i<(int)input.shape.size();++i) fd*=input.shape[i];
-        Tensor out(std::vector<int>{N,fd});
-        out.data = input.data;
-        return out;
+    inline void compile(const std::vector<std::vector<int>>& input_shapes) override {
+        int N=input_shapes[0][0], fd=1;
+        for (int i=1;i<(int)input_shapes[0].size();++i) fd*=input_shapes[0][i];
+        output_buffer = Tensor(std::vector<int>{N,fd});
+        grad_input_buffer = Tensor(input_shapes[0]);
     }
-    inline Tensor backward(const Tensor& go) override {
-        Tensor d(cached_input.shape);
-        d.data = go.data;
-        return d;
+
+    inline void forward(const Tensor& input) override {
+        const float* s=input.data.data(); float* d=output_buffer.data.data();
+        #pragma omp simd
+        for(int i=0;i<input.size();++i) d[i]=s[i];
+    }
+    inline void backward(const Tensor& go) override {
+        const float* g=go.data.data(); float* di=grad_input_buffer.data.data();
+        #pragma omp simd
+        for(int i=0;i<go.size();++i) di[i]=g[i];
     }
 };
 
