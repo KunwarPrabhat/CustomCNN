@@ -1,38 +1,34 @@
-# === Build Artifacts ===
+
 build/
 bin/
 obj/
-out/
 
-# === Executables & Binaries ===
+# --- Executables ---
+
 *.exe
-*.out
-*.app
-# Specific to your project's target name
 MetalNet
 MetalNetTests
+*.out
 
-# === Serialized Data & Models (Phase 5) ===
-# This prevents you from accidentally uploading massive trained weights
+# --- Phase 5: Neural Network weights ---
+
 *.bin
 *.model
 test_model.bin
 
-# === CMake Metadata ===
-CMakeCache.txt
-CMakeFiles/
-CMakeSettings.json
-cmake_install.cmake
-Makefile
-install_manifest.txt
-compile_commands.json
-!CMakeLists.txt
-
+# --- Tooling & IDEs ---
+# Clangd creates a local cache for autocomplete. Skip it.
 .clangd/
 .cache/
 .vscode/
-.idea/
-*.log
 
+# --- CMake leftovers ---
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# --- OS Junk ---
 .DS_Store
 Thumbs.db
