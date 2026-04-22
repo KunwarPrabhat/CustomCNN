@@ -1,5 +1,6 @@
 #include "include/MetalNet/MetalNet.h"
 #include <iostream>
+using namespace MetalNet;
 
 int main() {
     std::cout << "--- MetalNet CNN Training (Phase 2 Utilities) ---" << std::endl;

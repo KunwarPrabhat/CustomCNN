@@ -32,3 +32,10 @@ compile_commands.json
 # --- OS Junk ---
 .DS_Store
 Thumbs.db
+
+# --- Temporary scripts & artifacts ---
+_write_*.py
+test_results.txt
+*.txt
+!README.md
+!CMakeLists.txt

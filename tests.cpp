@@ -1,10 +1,11 @@
-﻿#include "include/MetalNet/MetalNet.h"
+#include "include/MetalNet/MetalNet.h"
 #include <iostream>
 #include <cmath>
 #include <fstream>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
+using namespace MetalNet;
 
 static int PASS=0, FAIL=0;
 static void report(const char* name, bool ok){
