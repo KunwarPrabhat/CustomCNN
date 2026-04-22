@@ -6,8 +6,6 @@ obj/
 # --- Executables ---
 
 *.exe
-MetalNet
-MetalNetTests
 *.out
 
 # --- Phase 5: Neural Network weights ---
