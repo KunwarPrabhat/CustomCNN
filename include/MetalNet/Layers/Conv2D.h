@@ -15,8 +15,9 @@ public:
         : in_channels(in_c), out_channels(out_c), kernel_size(k), stride(s), padding(p) {
         weights = Tensor(std::vector<int>{out_c, in_c, k, k});
         biases  = Tensor(out_c, 1);
-        weights.randomize();
-        biases.fill(0.1f);
+        int fan_in = in_c * k * k;
+        weights.fill_he_init(fan_in);
+        biases.fill(0.0f);
     }
 
     inline void compile(const std::vector<std::vector<int>>& input_shapes) override {

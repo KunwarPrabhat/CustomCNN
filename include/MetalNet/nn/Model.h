@@ -117,14 +117,16 @@ public:
     }
 
     inline void backward(const Tensor& grad_output) {
-        for (auto& layer : layers) layer->has_grad_cache = false;
+        // Clear all parent gradients first for pure additive accumulation
+        for (auto& layer : layers) {
+            layer->grad_output_buffer.fill(0.0f);
+        }
         
         float* dst = layers.back()->grad_output_buffer.data.data();
         const float* src = grad_output.data.data();
         int sz = grad_output.size();
         #pragma omp simd
         for (int k=0; k<sz; ++k) dst[k] = src[k];
-        layers.back()->has_grad_cache = true;
 
         for (int i = (int)layers.size() - 1; i >= 0; --i) {
             auto& layer  = layers[i];
@@ -135,40 +137,22 @@ public:
                 auto& parent = layer->input_nodes[j];
                 const Tensor& grad_to_pass = (layer->input_nodes.size() == 1) ? layer->grad_input_buffer : layer->multi_grad_input_buffers[j];
 
-                if (!parent->has_grad_cache) {
-                    float* pdst = parent->grad_output_buffer.data.data();
-                    const float* psrc = grad_to_pass.data.data();
-                    int psz = parent->grad_output_buffer.size();
-                    #pragma omp simd
-                    for (int k = 0; k < psz; ++k) pdst[k] = psrc[k];
-                    parent->has_grad_cache = true;
-                } else {
-                    float* pdst = parent->grad_output_buffer.data.data();
-                    const float* psrc = grad_to_pass.data.data();
-                    int psz = parent->grad_output_buffer.size();
-                    #pragma omp simd
-                    for (int k = 0; k < psz; ++k) pdst[k] += psrc[k];
-                }
+                float* pdst = parent->grad_output_buffer.data.data();
+                const float* psrc = grad_to_pass.data.data();
+                int psz = parent->grad_output_buffer.size();
+                #pragma omp simd
+                for (int k = 0; k < psz; ++k) pdst[k] += psrc[k];
             }
 
             for (size_t j = 0; j < layer->extra_input_nodes.size(); ++j) {
                 auto& extra_parent = layer->extra_input_nodes[j];
                 const Tensor& grad_to_pass = layer->grad_input_buffer;
 
-                if (!extra_parent->has_grad_cache) {
-                    float* pdst = extra_parent->grad_output_buffer.data.data();
-                    const float* psrc = grad_to_pass.data.data();
-                    int psz = extra_parent->grad_output_buffer.size();
-                    #pragma omp simd
-                    for (int k = 0; k < psz; ++k) pdst[k] = psrc[k];
-                    extra_parent->has_grad_cache = true;
-                } else {
-                    float* pdst = extra_parent->grad_output_buffer.data.data();
-                    const float* psrc = grad_to_pass.data.data();
-                    int psz = extra_parent->grad_output_buffer.size();
-                    #pragma omp simd
-                    for (int k = 0; k < psz; ++k) pdst[k] += psrc[k];
-                }
+                float* pdst = extra_parent->grad_output_buffer.data.data();
+                const float* psrc = grad_to_pass.data.data();
+                int psz = extra_parent->grad_output_buffer.size();
+                #pragma omp simd
+                for (int k = 0; k < psz; ++k) pdst[k] += psrc[k];
             }
         }
     }

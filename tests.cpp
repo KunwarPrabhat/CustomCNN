@@ -93,6 +93,7 @@ void test_math(){
     // BatchNorm running stats
     {
         BatchNorm2D bn(2);
+        bn.compile({{1,2,2,2}});
         Tensor inp(1,2,2,2); inp.fill(4.0f);
         bn.train(); bn.forward(inp);
         float rm_train=bn.running_mean(0,0);
@@ -106,6 +107,7 @@ void test_math(){
     // Gradient check
     {
         Dense layer(3,2);
+        layer.compile({{1,3}});
         layer.weights.fill(0.1f); layer.biases.fill(0.0f);
         Tensor inp(1,3); inp.fill(1.0f);
         Tensor tgt(1,2); tgt.fill(0.0f);
@@ -144,7 +146,9 @@ void test_hardware(){
 
     // Dense SIMD correctness
     {
-        Dense d(8,8); d.weights.fill(1.0f); d.biases.fill(0.0f);
+        Dense d(8,8); 
+        d.compile({{1,8}});
+        d.weights.fill(1.0f); d.biases.fill(0.0f);
         Tensor inp(1,8); inp.fill(1.0f);
         Tensor out=d.forward(inp);
         bool ok=true;
@@ -157,6 +161,7 @@ void test_hardware(){
         Tensor img(1,1,4,4);
         for(int i=0;i<16;++i) img.data[i]=(float)(i+1);
         Conv2D conv(1,1,2,1,0);
+        conv.compile({{1,1,4,4}});
         conv.weights.fill(1.0f); conv.biases.fill(0.0f);
         Tensor direct=conv.forward(img);
         Tensor col=im2col(img,2,1,0);

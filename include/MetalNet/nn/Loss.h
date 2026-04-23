@@ -54,6 +54,7 @@ public:
     }
     inline Tensor backward(const Tensor& p, const Tensor& t) override {
         const int N=p.shape[0], C=p.shape[1]; Tensor d(p.shape);
+        #pragma omp parallel for
         for (int i=0;i<N;++i) {
             float mx=-std::numeric_limits<float>::infinity();
             for (int j=0;j<C;++j) mx=std::max(mx,p(i,j));

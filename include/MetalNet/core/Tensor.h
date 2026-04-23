@@ -60,6 +60,17 @@ public:
     }
   }
 
+  inline void fill_he_init(int fan_in) {
+    if (fan_in <= 0) return;
+    static thread_local std::mt19937 gen(std::random_device{}());
+    float limit = std::sqrt(2.0f / fan_in);
+    std::normal_distribution<float> dis(0.0f, limit);
+    for (auto &v : data) {
+      v = dis(gen);
+    }
+  }
+
+
   inline void fill_constant(float value) {
     std::fill(data.begin(), data.end(), value);
   }

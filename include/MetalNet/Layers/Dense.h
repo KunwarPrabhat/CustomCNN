@@ -12,8 +12,9 @@ public:
     inline Dense(int in_sz, int out_sz) : input_size(in_sz), output_size(out_sz) {
         weights = Tensor(in_sz, out_sz);
         biases  = Tensor(1, out_sz);
-        weights.randomize();
-        biases.fill(0.1f);
+        int fan_in = in_sz;
+        weights.fill_he_init(fan_in);
+        biases.fill(0.0f);
     }
 
     inline void compile(const std::vector<std::vector<int>>& input_shapes) override {

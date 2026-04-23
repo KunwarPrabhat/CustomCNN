@@ -46,16 +46,21 @@ public:
     inline void backward_multi(const Tensor& go) override {
         const int N=go.shape[0], H=go.shape[2], W=go.shape[3];
         const int total_c=go.shape[1];
-        const float* src=go.data.data(); int cc=0;
-        for (size_t i=0; i<channel_splits.size(); ++i) {
-            int sp = channel_splits[i];
-            float* d=multi_grad_input_buffers[i].data.data();
-            for (int n=0;n<N;++n) for (int c=0;c<sp;++c) {
-                std::span<const float> sv(src+n*(total_c*H*W)+(cc+c)*(H*W), H*W);
-                std::span<float>       dv(d  +n*(sp*H*W)    +c       *(H*W), H*W);
-                std::copy(sv.begin(), sv.end(), dv.begin());
+        const float* src=go.data.data();
+        
+        #pragma omp parallel for schedule(static)
+        for (int n=0;n<N;++n) {
+            int cc=0;
+            for (size_t i=0; i<channel_splits.size(); ++i) {
+                int sp = channel_splits[i];
+                float* d=multi_grad_input_buffers[i].data.data();
+                for (int c=0;c<sp;++c) {
+                    std::span<const float> sv(src+n*(total_c*H*W)+(cc+c)*(H*W), H*W);
+                    std::span<float>       dv(d  +n*(sp*H*W)    +c       *(H*W), H*W);
+                    std::copy(sv.begin(), sv.end(), dv.begin());
+                }
+                cc+=sp;
             }
-            cc+=sp;
         }
     }
     inline std::string name() const override { return "Concat"; }
