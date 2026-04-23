@@ -38,15 +38,22 @@ public:
         #pragma omp parallel for reduction(+:loss)
         for (int i=0; i<N; ++i) {
             float mx = -std::numeric_limits<float>::infinity();
-            for (int j=0; j<C; ++j) mx = std::max(mx, p(i,j));
+            for (int j=0; j<C; ++j) {
+                float clamped_p = std::clamp(p(i,j), -100.0f, 100.0f);
+                mx = std::max(mx, clamped_p);
+            }
             
             float sum_exp = 0.0f;
-            for (int j=0; j<C; ++j) sum_exp += std::exp(p(i,j) - mx);
+            for (int j=0; j<C; ++j) {
+                float clamped_p = std::clamp(p(i,j), -100.0f, 100.0f);
+                sum_exp += std::exp(clamped_p - mx);
+            }
             float log_sum_exp = mx + std::log(sum_exp);
             
             for (int j=0; j<C; ++j) {
+                float clamped_p = std::clamp(p(i,j), -100.0f, 100.0f);
                 if (t(i,j) > 0.0f) {
-                    loss -= t(i,j) * (p(i,j) - log_sum_exp);
+                    loss -= t(i,j) * (clamped_p - log_sum_exp);
                 }
             }
         }
@@ -57,9 +64,19 @@ public:
         #pragma omp parallel for
         for (int i=0;i<N;++i) {
             float mx=-std::numeric_limits<float>::infinity();
-            for (int j=0;j<C;++j) mx=std::max(mx,p(i,j));
-            float se=0; for (int j=0;j<C;++j) se+=std::exp(p(i,j)-mx);
-            for (int j=0;j<C;++j) d(i,j)=(std::exp(p(i,j)-mx)/se-t(i,j))/N;
+            for (int j=0;j<C;++j) {
+                float clamped_p = std::clamp(p(i,j), -100.0f, 100.0f);
+                mx=std::max(mx,clamped_p);
+            }
+            float se=0; 
+            for (int j=0;j<C;++j) {
+                float clamped_p = std::clamp(p(i,j), -100.0f, 100.0f);
+                se+=std::exp(clamped_p-mx);
+            }
+            for (int j=0;j<C;++j) {
+                float clamped_p = std::clamp(p(i,j), -100.0f, 100.0f);
+                d(i,j)=(std::exp(clamped_p-mx)/se-t(i,j))/N;
+            }
         }
         return d;
     }

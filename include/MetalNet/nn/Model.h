@@ -120,6 +120,9 @@ public:
         // Clear all parent gradients first for pure additive accumulation
         for (auto& layer : layers) {
             layer->grad_output_buffer.fill(0.0f);
+            for (Tensor* p : layer->get_parameters()) {
+                p->zero_grad();
+            }
         }
         
         float* dst = layers.back()->grad_output_buffer.data.data();

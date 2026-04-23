@@ -56,7 +56,6 @@ public:
                     float mh = md[i]/bc1, vh = vd[i]/bc2;
                     pd[i] -= lr * mh / (std::sqrt(vh) + eps);
                 }
-                p->zero_grad();
             }
         }
     }
