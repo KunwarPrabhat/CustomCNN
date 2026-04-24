@@ -3,6 +3,7 @@
 #include <fstream>
 #include <stdexcept>
 #include <charconv>
+#include <iostream>
 #include "../core/Tensor.h"
 
 namespace MetalNet {
@@ -61,17 +62,18 @@ public:
         for (int i=0;i<images.size();++i) d[i]/=255.0f;
     }
 
-    static inline Dataset load_csv(const std::string& path, int num_samples, int num_pixels, bool has_header = false, int num_classes = 10) {
+    static inline Dataset load_csv(const std::string& path, int num_samples, int num_pixels, bool has_header = false, int num_classes = 10, int label_col = 0) {
         std::ifstream file(path);
         if (!file.is_open()) {
             throw std::runtime_error("Cannot open CSV file: " + path);
         }
 
         Dataset ds;
-        int h = 1, w = num_pixels;
-        if (num_pixels == 784) { h = 28; w = 28; } 
+        int c = 1, h = 1, w = num_pixels;
+        if (num_pixels == 784)  { h = 28; w = 28; } 
+        if (num_pixels == 3072) { c = 3;  h = 32; w = 32; }
 
-        ds.images = Tensor(num_samples, 1, h, w);
+        ds.images = Tensor(num_samples, c, h, w);
         ds.labels = Tensor(num_samples, num_classes);
         ds.labels.fill(0.0f);
 
@@ -92,27 +94,38 @@ public:
             
             size_t start = 0;
             size_t end = line.find(',');
-            if (end == std::string::npos) continue;
+            
+            int col_idx = 0;
+            int label = -1;
+            int p = 0;
 
-            int label = 0;
-            std::from_chars(line.data() + start, line.data() + end, label);
-            if (label >= 0 && label < num_classes) {
-                lbl_data[lbl_offset + label] = 1.0f;
-            }
-            lbl_offset += num_classes;
-            
-            start = end + 1;
-            
-            for (int p = 0; p < num_pixels; ++p) {
-                end = line.find(',', start);
+            while (start < line.length()) {
                 if (end == std::string::npos) end = line.length();
                 
-                int val = 0;
-                std::from_chars(line.data() + start, line.data() + end, val);
-                img_data[img_offset++] = val / 255.0f;
+                if (col_idx == label_col) {
+                    std::from_chars(line.data() + start, line.data() + end, label);
+                    if (label >= 0 && label < num_classes) {
+                        lbl_data[lbl_offset + label] = 1.0f;
+                    }
+                    if (i == 0) {
+                        std::cout << "[DEBUG] First CSV Row -> Parsed Label: " << label << " | One-Hot: [";
+                        for (int cl = 0; cl < num_classes; ++cl) {
+                            std::cout << lbl_data[lbl_offset + cl] << (cl == num_classes - 1 ? "" : ", ");
+                        }
+                        std::cout << "]\n";
+                    }
+                } else if (p < num_pixels) {
+                    int val = 0;
+                    std::from_chars(line.data() + start, line.data() + end, val);
+                    img_data[img_offset++] = val / 255.0f;
+                    p++;
+                }
                 
+                col_idx++;
                 start = end + 1;
+                end = line.find(',', start);
             }
+            lbl_offset += num_classes;
         }
         return ds;
     }
