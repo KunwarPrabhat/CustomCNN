@@ -1,7 +1,6 @@
 #pragma once
 #include "Layer.h"
 #include <cmath>
-#include <span>
 
 namespace MetalNet {
 
@@ -15,7 +14,8 @@ public:
     Tensor x_norm, batch_var, batch_mean;
 
     inline void compile(const std::vector<std::vector<int>>& input_shapes) override {
-        const int C=input_shapes[0][1];
+        // [N, H, W, C]
+        const int C=input_shapes[0][3];
         output_buffer = Tensor(input_shapes[0]);
         grad_input_buffer = Tensor(input_shapes[0]);
         x_norm = Tensor(input_shapes[0]);
@@ -38,8 +38,7 @@ public:
 
     inline Tensor& forward(const Tensor& input) override {
         cached_input_ptr = &input;
-        const int N=input.shape[0], C=input.shape[1];
-        const int H=input.shape[2], W=input.shape[3];
+        const int N=input.shape[0], H=input.shape[1], W=input.shape[2], C=input.shape[3];
         const int HW=H*W, m=N*HW;
         
         const float* inp = input.data.data();
@@ -50,28 +49,31 @@ public:
         if (is_training) {
             float* mean = batch_mean.data.data();
             float* var = batch_var.data.data();
+            
+            for (int c=0; c<C; ++c) { mean[c] = 0.0f; var[c] = 0.0f; }
 
-            #pragma omp parallel for schedule(static)
-            for (int c=0; c<C; ++c) {
-                float acc=0.0f;
-                for (int b=0; b<N; ++b) {
-                    std::span<const float> row(inp + b*(C*HW) + c*HW, HW);
-                    #pragma omp simd reduction(+:acc)
-                    for (int hw=0; hw<HW; ++hw) acc += row[hw];
+            for (int b=0; b<N; ++b) {
+                const float* ptr = inp + b*(HW*C);
+                for (int hw=0; hw<HW; ++hw) {
+                    const float* p = ptr + hw*C;
+                    #pragma omp simd
+                    for (int c=0; c<C; ++c) mean[c] += p[c];
                 }
-                mean[c] = acc / m;
             }
+            for (int c=0; c<C; ++c) mean[c] /= m;
 
-            #pragma omp parallel for schedule(static)
-            for (int c=0; c<C; ++c) {
-                float acc=0.0f, mu=mean[c];
-                for (int b=0; b<N; ++b) {
-                    std::span<const float> row(inp + b*(C*HW) + c*HW, HW);
-                    #pragma omp simd reduction(+:acc)
-                    for (int hw=0; hw<HW; ++hw) { float d=row[hw]-mu; acc+=d*d; }
+            for (int b=0; b<N; ++b) {
+                const float* ptr = inp + b*(HW*C);
+                for (int hw=0; hw<HW; ++hw) {
+                    const float* p = ptr + hw*C;
+                    #pragma omp simd
+                    for (int c=0; c<C; ++c) {
+                        float d = p[c] - mean[c];
+                        var[c] += d * d;
+                    }
                 }
-                var[c] = acc / m;
             }
+            for (int c=0; c<C; ++c) var[c] /= m;
 
             for (int c=0; c<C; ++c) {
                 running_mean.data[c] = (1-momentum)*running_mean.data[c] + momentum*mean[c];
@@ -81,17 +83,19 @@ public:
             float* xn = x_norm.data.data();
 
             #pragma omp parallel for schedule(static)
-            for (int c=0; c<C; ++c) {
-                const float inv_std=1.0f/std::sqrt(var[c]+eps);
-                const float gc=gam[c], bc=bet[c], mu=mean[c];
-                for (int b=0; b<N; ++b) {
-                    std::span<const float> sv(inp + b*(C*HW) + c*HW, HW);
-                    std::span<float>       dv(out + b*(C*HW) + c*HW, HW);
-                    std::span<float>       xv(xn  + b*(C*HW) + c*HW, HW);
+            for (int b=0; b<N; ++b) {
+                const float* sv = inp + b*(HW*C);
+                float*       dv = out + b*(HW*C);
+                float*       xv = xn  + b*(HW*C);
+                for (int hw=0; hw<HW; ++hw) {
+                    const float* s = sv + hw*C;
+                    float*       d = dv + hw*C;
+                    float*       x = xv + hw*C;
                     #pragma omp simd
-                    for (int hw=0; hw<HW; ++hw) {
-                        xv[hw] = (sv[hw] - mu) * inv_std;
-                        dv[hw] = gc * xv[hw] + bc;
+                    for (int c=0; c<C; ++c) {
+                        float inv_std = 1.0f/std::sqrt(var[c]+eps);
+                        x[c] = (s[c] - mean[c]) * inv_std;
+                        d[c] = gam[c] * x[c] + bet[c];
                     }
                 }
             }
@@ -99,15 +103,17 @@ public:
             const float* rm = running_mean.data.data();
             const float* rv = running_var.data.data();
             #pragma omp parallel for schedule(static)
-            for (int c=0; c<C; ++c) {
-                const float inv_std=1.0f/std::sqrt(rv[c]+eps);
-                const float gc=gam[c], bc=bet[c], mu=rm[c];
-                for (int b=0; b<N; ++b) {
-                    std::span<const float> sv(inp + b*(C*HW) + c*HW, HW);
-                    std::span<float>       dv(out + b*(C*HW) + c*HW, HW);
+            for (int b=0; b<N; ++b) {
+                const float* sv = inp + b*(HW*C);
+                float*       dv = out + b*(HW*C);
+                for (int hw=0; hw<HW; ++hw) {
+                    const float* s = sv + hw*C;
+                    float*       d = dv + hw*C;
                     #pragma omp simd
-                    for (int hw=0; hw<HW; ++hw)
-                        dv[hw] = gc * (sv[hw] - mu) * inv_std + bc;
+                    for (int c=0; c<C; ++c) {
+                        float inv_std = 1.0f/std::sqrt(rv[c]+eps);
+                        d[c] = gam[c] * (s[c] - rm[c]) * inv_std + bet[c];
+                    }
                 }
             }
         }
@@ -115,8 +121,8 @@ public:
     }
 
     inline void backward(const Tensor& grad_output) override {
-        const int N=grad_output.shape[0], C=grad_output.shape[1];
-        const int H=grad_output.shape[2], W=grad_output.shape[3];
+        const int N=grad_output.shape[0], H=grad_output.shape[1];
+        const int W=grad_output.shape[2], C=grad_output.shape[3];
         const int HW=H*W, m=N*HW;
 
         const float* go = grad_output.data.data();
@@ -126,33 +132,44 @@ public:
         float*       db = beta.grad.data();
         const float* bv = batch_var.data.data();
 
-        #pragma omp parallel for schedule(static)
-        for (int c=0; c<C; ++c) {
-            const float inv_std=1.0f/std::sqrt(bv[c]+eps);
-            const float gc=gamma.data[c];
-            float sum_d=0.0f, sum_dx=0.0f, dgc=0.0f, dbc=0.0f;
+        std::vector<float> sum_d(C, 0.0f);
+        std::vector<float> sum_dx(C, 0.0f);
 
-            for (int b=0; b<N; ++b) {
-                std::span<const float> gov(go + b*(C*HW) + c*HW, HW);
-                std::span<const float> xnv(xn + b*(C*HW) + c*HW, HW);
-                #pragma omp simd reduction(+:sum_d,sum_dx,dgc,dbc)
-                for (int hw=0; hw<HW; ++hw) {
-                    sum_d  += gov[hw];
-                    sum_dx += gov[hw]*xnv[hw];
-                    dgc    += gov[hw]*xnv[hw];
-                    dbc    += gov[hw];
+        for (int b=0; b<N; ++b) {
+            const float* gov = go + b*(HW*C);
+            const float* xnv = xn + b*(HW*C);
+            for (int hw=0; hw<HW; ++hw) {
+                const float* g = gov + hw*C;
+                const float* x = xnv + hw*C;
+                #pragma omp simd
+                for (int c=0; c<C; ++c) {
+                    sum_d[c]  += g[c];
+                    sum_dx[c] += g[c]*x[c];
                 }
             }
-            dg[c] += dgc;
-            db[c] += dbc;
+        }
 
-            for (int b=0; b<N; ++b) {
-                std::span<const float> gov(go + b*(C*HW) + c*HW, HW);
-                std::span<const float> xnv(xn + b*(C*HW) + c*HW, HW);
-                std::span<float>       div(di + b*(C*HW) + c*HW, HW);
+        #pragma omp simd
+        for (int c=0; c<C; ++c) {
+            dg[c] += sum_dx[c];
+            db[c] += sum_d[c];
+        }
+
+        #pragma omp parallel for schedule(static)
+        for (int b=0; b<N; ++b) {
+            const float* gov = go + b*(HW*C);
+            const float* xnv = xn + b*(HW*C);
+            float*       div = di + b*(HW*C);
+            
+            for (int hw=0; hw<HW; ++hw) {
+                const float* g = gov + hw*C;
+                const float* x = xnv + hw*C;
+                float*       d = div + hw*C;
                 #pragma omp simd
-                for (int hw=0; hw<HW; ++hw)
-                    div[hw] = (gc*inv_std/m)*(m*gov[hw] - sum_d - xnv[hw]*sum_dx);
+                for (int c=0; c<C; ++c) {
+                    float inv_std=1.0f/std::sqrt(bv[c]+eps);
+                    d[c] = (gamma.data[c]*inv_std/m)*(m*g[c] - sum_d[c] - x[c]*sum_dx[c]);
+                }
             }
         }
     }

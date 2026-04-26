@@ -2,6 +2,7 @@
 #include "Layer.h"
 #include <span>
 #include <omp.h>
+#include <immintrin.h>
 
 namespace MetalNet {
 
@@ -21,10 +22,9 @@ public:
 
     inline void compile(const std::vector<std::vector<int>>& input_shapes) override {
         if (input_shapes.empty()) throw std::runtime_error("Dense: input_shapes is empty");
-        int in_features = input_shapes[0].back(); // Assuming flat or (N, D)
+        int in_features = input_shapes[0].back(); 
         if (in_features != input_size) {
-            throw std::runtime_error("Dense: dimension mismatch. Expected " + std::to_string(input_size) + 
-                                     ", got " + std::to_string(in_features));
+            throw std::runtime_error("Dense: dimension mismatch.");
         }
         const int N = input_shapes[0][0];
         output_buffer = Tensor(N, output_size);
@@ -57,10 +57,20 @@ public:
             
             for (int i = i0; i < i_max; ++i) {
                 float* o_row = out + i * M;
+                #ifdef __AVX2__
+                int j = 0;
+                for (; j + 7 < M; j += 8) {
+                    _mm256_storeu_ps(o_row + j, _mm256_loadu_ps(b + j));
+                }
+                for (; j < M; ++j) {
+                    o_row[j] = b[j];
+                }
+                #else
                 #pragma omp simd
                 for (int j = 0; j < M; ++j) {
                     o_row[j] = b[j];
                 }
+                #endif
             }
 
             for (int k0 = 0; k0 < K; k0 += BLOCK_SIZE) {
@@ -73,10 +83,35 @@ public:
                         for (int k = k0; k < k_max; ++k) {
                             float val = i_row[k];
                             const float* w_row = W + k * M;
+                            #ifdef __AVX2__
+                            __m256 v_val = _mm256_set1_ps(val);
+                            int j = j0;
+                            // Unroll 2x
+                            for (; j + 15 < j_max; j += 16) {
+                                __m256 out_v0 = _mm256_loadu_ps(o_row + j);
+                                __m256 out_v1 = _mm256_loadu_ps(o_row + j + 8);
+                                __m256 w_v0 = _mm256_loadu_ps(w_row + j);
+                                __m256 w_v1 = _mm256_loadu_ps(w_row + j + 8);
+                                out_v0 = _mm256_fmadd_ps(v_val, w_v0, out_v0);
+                                out_v1 = _mm256_fmadd_ps(v_val, w_v1, out_v1);
+                                _mm256_storeu_ps(o_row + j, out_v0);
+                                _mm256_storeu_ps(o_row + j + 8, out_v1);
+                            }
+                            for (; j + 7 < j_max; j += 8) {
+                                __m256 out_v = _mm256_loadu_ps(o_row + j);
+                                __m256 w_v = _mm256_loadu_ps(w_row + j);
+                                out_v = _mm256_fmadd_ps(v_val, w_v, out_v);
+                                _mm256_storeu_ps(o_row + j, out_v);
+                            }
+                            for (; j < j_max; ++j) {
+                                o_row[j] += val * w_row[j];
+                            }
+                            #else
                             #pragma omp simd
                             for (int j = j0; j < j_max; ++j) {
                                 o_row[j] += val * w_row[j];
                             }
+                            #endif
                         }
                     }
                 }
@@ -106,7 +141,6 @@ public:
             local_grad_biases[t].fill(0.0f);
         }
 
-        // di = go @ W^T, dW = inp^T @ go, db = sum(go)
         #pragma omp parallel for schedule(static)
         for (int i0 = 0; i0 < N; i0 += BLOCK_SIZE) {
             int i_max = std::min(i0 + BLOCK_SIZE, N);
@@ -124,10 +158,43 @@ public:
                         for (int k = k0; k < k_max; ++k) {
                             const float* w_row = W + k * M;
                             float acc = 0.0f;
+                            #ifdef __AVX2__
+                            __m256 v_acc = _mm256_setzero_ps();
+                            int j = j0;
+                            for (; j + 31 < j_max; j += 32) {
+                                __m256 go0 = _mm256_loadu_ps(go_row + j);
+                                __m256 w0 = _mm256_loadu_ps(w_row + j);
+                                v_acc = _mm256_fmadd_ps(go0, w0, v_acc);
+                                
+                                __m256 go1 = _mm256_loadu_ps(go_row + j + 8);
+                                __m256 w1 = _mm256_loadu_ps(w_row + j + 8);
+                                v_acc = _mm256_fmadd_ps(go1, w1, v_acc);
+                                
+                                __m256 go2 = _mm256_loadu_ps(go_row + j + 16);
+                                __m256 w2 = _mm256_loadu_ps(w_row + j + 16);
+                                v_acc = _mm256_fmadd_ps(go2, w2, v_acc);
+                                
+                                __m256 go3 = _mm256_loadu_ps(go_row + j + 24);
+                                __m256 w3 = _mm256_loadu_ps(w_row + j + 24);
+                                v_acc = _mm256_fmadd_ps(go3, w3, v_acc);
+                            }
+                            for (; j + 7 < j_max; j += 8) {
+                                __m256 go0 = _mm256_loadu_ps(go_row + j);
+                                __m256 w0 = _mm256_loadu_ps(w_row + j);
+                                v_acc = _mm256_fmadd_ps(go0, w0, v_acc);
+                            }
+                            alignas(32) float acc_arr[8];
+                            _mm256_store_ps(acc_arr, v_acc);
+                            for (int a = 0; a < 8; ++a) acc += acc_arr[a];
+                            for (; j < j_max; ++j) {
+                                acc += go_row[j] * w_row[j];
+                            }
+                            #else
                             #pragma omp simd reduction(+:acc)
                             for (int j = j0; j < j_max; ++j) {
                                 acc += go_row[j] * w_row[j];
                             }
+                            #endif
                             di_row[k] += acc;
                         }
                     }
@@ -143,10 +210,24 @@ public:
                         for (int i = i0; i < i_max; ++i) {
                             float val = inp[i * K + k]; // inp^T
                             const float* go_row = go + i * M;
+                            #ifdef __AVX2__
+                            __m256 v_val = _mm256_set1_ps(val);
+                            int j = j0;
+                            for (; j + 7 < j_max; j += 8) {
+                                __m256 h_v = _mm256_loadu_ps(dw_row + j);
+                                __m256 g_v = _mm256_loadu_ps(go_row + j);
+                                h_v = _mm256_fmadd_ps(v_val, g_v, h_v);
+                                _mm256_storeu_ps(dw_row + j, h_v);
+                            }
+                            for (; j < j_max; ++j) {
+                                dw_row[j] += val * go_row[j];
+                            }
+                            #else
                             #pragma omp simd
                             for (int j = j0; j < j_max; ++j) {
                                 dw_row[j] += val * go_row[j];
                             }
+                            #endif
                         }
                     }
                 }
@@ -154,10 +235,23 @@ public:
 
             for (int i = i0; i < i_max; ++i) {
                 const float* go_row = go + i * M;
+                #ifdef __AVX2__
+                int j = 0;
+                for (; j + 7 < M; j += 8) {
+                    __m256 db_v = _mm256_loadu_ps(local_db + j);
+                    __m256 go_v = _mm256_loadu_ps(go_row + j);
+                    db_v = _mm256_add_ps(db_v, go_v);
+                    _mm256_storeu_ps(local_db + j, db_v);
+                }
+                for (; j < M; ++j) {
+                    local_db[j] += go_row[j];
+                }
+                #else
                 #pragma omp simd
                 for (int j = 0; j < M; ++j) {
                     local_db[j] += go_row[j];
                 }
+                #endif
             }
         }
 
