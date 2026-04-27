@@ -29,12 +29,12 @@ public:
 
   inline Tensor(int rows, int cols) : shape({rows, cols}) {
     data.resize(rows * cols, 0.0f);
-    grad.resize(rows * cols, 0.0f);
+    //grad.resize(rows * cols, 0.0f);
   }
 
   inline Tensor(int n, int c, int h, int w) : shape({n, c, h, w}) {
     data.resize(n * c * h * w, 0.0f);
-    grad.resize(n * c * h * w, 0.0f);
+    //grad.resize(n * c * h * w, 0.0f);
   }
 
   inline explicit Tensor(std::vector<int> s) : shape(std::move(s)) {
@@ -42,10 +42,15 @@ public:
     for (int d : shape)
       total *= d;
     data.resize(total, 0.0f);
-    grad.resize(total, 0.0f);
+    //grad.resize(total, 0.0f);
+  }
+  //only allocate gradients for learnable parameters
+  inline void require_grad() {
+    if (grad.size() != data.size()) {
+      grad.resize(data.size(), 0.0f);
+    }
   }
 
-  // [OPTIMIZATION 1] Replaced slow, legacy C rand() with modern C++ engine
   inline void randomize() { fill_random(-0.01f, 0.01f); }
 
   // [FIX 1] Added default arguments.
@@ -75,7 +80,9 @@ public:
     std::fill(data.begin(), data.end(), value);
   }
 
-  inline void zero_grad() { std::fill(grad.begin(), grad.end(), 0.0f); }
+  inline void zero_grad() { 
+    if (!grad.empty()) std::fill(grad.begin(), grad.end(), 0.0f); 
+  }
 
   inline void fill(float v) {
     fill_constant(v); // Consolidate logic to avoid code duplication
@@ -144,8 +151,8 @@ public:
 
     int32_t zp = (int32_t)std::round(-128.0f - mn / sc);
 
-// [OPTIMIZATION 5] Compiler hint to vectorize the quantization loop
-#pragma omp simd
+    // [OPTIMIZATION 5] Compiler hint to vectorize the quantization loop
+    #pragma omp simd
     for (int i = 0; i < (int)data.size(); ++i) {
       int32_t qv = (int32_t)std::round(data[i] / sc) + zp;
       qv = std::max(-128, std::min(127, qv));

@@ -8,6 +8,8 @@
 #include "../Layers/Layer.h"
 #include "Optimizer.h"
 #include "Loss.h"
+#include "../Layers/BatchNorm2D.h"     
+#include "../Layers/FusedConvBNReLU.h" 
 
 namespace MetalNet {
 
@@ -160,8 +162,61 @@ public:
         }
     }
 
-    inline void train() { for (auto& l : layers) l->train(); }
-    inline void eval()  { for (auto& l : layers) l->eval();  }
+    inline void eval() { 
+        for (auto& n : nodes) n->eval(); 
+        for (auto& l : layers) {
+            l->eval(); 
+            // NATIVE INFERENCE MEMORY OPTIMIZATION (PyTorch torch.no_grad() equivalent)
+            l->grad_input_buffer.data.clear();  l->grad_input_buffer.data.shrink_to_fit();
+            l->grad_output_buffer.data.clear(); l->grad_output_buffer.data.shrink_to_fit();
+            for (auto& buf : l->multi_grad_input_buffers) {
+                buf.data.clear(); buf.data.shrink_to_fit();
+            }
+            // Clear layer-specific training buffers safely
+            if (auto bn = dynamic_cast<BatchNorm2D*>(l)) {
+                bn->x_norm.data.clear(); bn->x_norm.data.shrink_to_fit();
+            }
+            if (auto fused = dynamic_cast<FusedConvBNReLU*>(l)) {
+                fused->x_norm.data.clear(); fused->x_norm.data.shrink_to_fit();
+            }
+        }
+    }
+
+    inline void train() { 
+        for (auto& n : nodes) n->train(); 
+        for (auto& l : layers) {
+            l->train();
+            // AUTOMATIC RE-ALLOCATION FOR TRAINING
+            if (l->grad_input_buffer.data.empty() && !l->grad_input_buffer.shape.empty()) {
+                int sz = 1; for(int d: l->grad_input_buffer.shape) sz *= d;
+                l->grad_input_buffer.data.resize(sz, 0.0f);
+            }
+            if (l->grad_output_buffer.data.empty() && !l->grad_output_buffer.shape.empty()) {
+                int sz = 1; for(int d: l->grad_output_buffer.shape) sz *= d;
+                l->grad_output_buffer.data.resize(sz, 0.0f);
+            }
+            for (auto& buf : l->multi_grad_input_buffers) {
+                 if (buf.data.empty() && !buf.shape.empty()) {
+                      int sz = 1; for(int d: buf.shape) sz *= d;
+                      buf.data.resize(sz, 0.0f);
+                 }
+            }
+            if (auto bn = dynamic_cast<BatchNorm2D*>(l)) {
+                if(bn->x_norm.data.empty() && !bn->x_norm.shape.empty()) {
+                    int sz = 1; for(int d: bn->x_norm.shape) sz *= d;
+                    bn->x_norm.data.resize(sz, 0.0f);
+                }
+            }
+            if (auto fused = dynamic_cast<FusedConvBNReLU*>(l)) {
+                if(fused->x_norm.data.empty() && !fused->x_norm.shape.empty()) {
+                    int sz = 1; for(int d: fused->x_norm.shape) sz *= d;
+                    fused->x_norm.data.resize(sz, 0.0f);
+                }
+            }
+            // Enable gradients on learnable parameters
+            for (Tensor* p : l->get_parameters()) p->require_grad();
+        }
+    }
 
     inline void save(const std::string& filename) {
         std::string json = "{ \"layers\": [";
