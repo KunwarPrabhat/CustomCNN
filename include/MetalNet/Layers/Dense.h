@@ -37,8 +37,7 @@ public:
             local_grad_biases.emplace_back(1, output_size);
         }
     }
-
-    inline Tensor& forward(const Tensor& input) override {
+inline Tensor& forward(const Tensor& input) override {
         cached_input_ptr = &input;
         const int N = input.shape[0];
         const int K = input_size;
@@ -51,68 +50,56 @@ public:
         
         constexpr int BLOCK_SIZE = 64;
         
-        // [LATENCY FIX] Bypass OpenMP overhead when Batch Size == 1
+        // [SCALING FIX] Parallelize directly over N. 
+        // For Batch 16, exactly 16 threads will wake up and process 1 image each!
         #pragma omp parallel for schedule(static) if(N > 1)
-        for (int i0 = 0; i0 < N; i0 += BLOCK_SIZE) {
-            int i_max = std::min(i0 + BLOCK_SIZE, N);
-            for (int i = i0; i < i_max; ++i) {
-                float* o_row = out + i * M;
-                #ifdef __AVX2__
-                int j = 0;
-                for (; j + 7 < M; j += 8) {
-                    _mm256_storeu_ps(o_row + j, _mm256_loadu_ps(b + j));
-                }
-                for (; j < M; ++j) {
-                    o_row[j] = b[j];
-                }
-                #else
-                #pragma omp simd
-                for (int j = 0; j < M; ++j) {
-                    o_row[j] = b[j];
-                }
-                #endif
+        for (int i = 0; i < N; ++i) {
+            float* o_row = out + i * M;
+            
+            #ifdef __AVX2__
+            int j = 0;
+            for (; j + 7 < M; j += 8) {
+                _mm256_storeu_ps(o_row + j, _mm256_loadu_ps(b + j));
             }
+            for (; j < M; ++j) o_row[j] = b[j];
+            #else
+            #pragma omp simd
+            for (int j = 0; j < M; ++j) o_row[j] = b[j];
+            #endif
 
+            const float* i_row = inp + i * K;
+            // Keep blocking for Cache Locality, but inside the thread!
             for (int k0 = 0; k0 < K; k0 += BLOCK_SIZE) {
                 int k_max = std::min(k0 + BLOCK_SIZE, K);
                 for (int j0 = 0; j0 < M; j0 += BLOCK_SIZE) {
                     int j_max = std::min(j0 + BLOCK_SIZE, M);
-                    for (int i = i0; i < i_max; ++i) {
-                        float* o_row = out + i * M;
-                        const float* i_row = inp + i * K;
-                        for (int k = k0; k < k_max; ++k) {
-                            float val = i_row[k];
-                            const float* w_row = W + k * M;
-                            #ifdef __AVX2__
-                            __m256 v_val = _mm256_set1_ps(val);
-                            int j = j0;
-                            // Unroll 2x
-                            for (; j + 15 < j_max; j += 16) {
-                                __m256 out_v0 = _mm256_loadu_ps(o_row + j);
-                                __m256 out_v1 = _mm256_loadu_ps(o_row + j + 8);
-                                __m256 w_v0 = _mm256_loadu_ps(w_row + j);
-                                __m256 w_v1 = _mm256_loadu_ps(w_row + j + 8);
-                                out_v0 = _mm256_fmadd_ps(v_val, w_v0, out_v0);
-                                out_v1 = _mm256_fmadd_ps(v_val, w_v1, out_v1);
-                                _mm256_storeu_ps(o_row + j, out_v0);
-                                _mm256_storeu_ps(o_row + j + 8, out_v1);
-                            }
-                            for (; j + 7 < j_max; j += 8) {
-                                __m256 out_v = _mm256_loadu_ps(o_row + j);
-                                __m256 w_v = _mm256_loadu_ps(w_row + j);
-                                out_v = _mm256_fmadd_ps(v_val, w_v, out_v);
-                                _mm256_storeu_ps(o_row + j, out_v);
-                            }
-                            for (; j < j_max; ++j) {
-                                o_row[j] += val * w_row[j];
-                            }
-                            #else
-                            #pragma omp simd
-                            for (int j = j0; j < j_max; ++j) {
-                                o_row[j] += val * w_row[j];
-                            }
-                            #endif
+                    for (int k = k0; k < k_max; ++k) {
+                        float val = i_row[k];
+                        const float* w_row = W + k * M;
+                        
+                        #ifdef __AVX2__
+                        __m256 v_val = _mm256_set1_ps(val);
+                        int jj = j0;
+                        for (; jj + 15 < j_max; jj += 16) {
+                            __m256 out_v0 = _mm256_loadu_ps(o_row + jj);
+                            __m256 out_v1 = _mm256_loadu_ps(o_row + jj + 8);
+                            out_v0 = _mm256_fmadd_ps(v_val, _mm256_loadu_ps(w_row + jj), out_v0);
+                            out_v1 = _mm256_fmadd_ps(v_val, _mm256_loadu_ps(w_row + jj + 8), out_v1);
+                            _mm256_storeu_ps(o_row + jj, out_v0);
+                            _mm256_storeu_ps(o_row + jj + 8, out_v1);
                         }
+                        for (; jj + 7 < j_max; jj += 8) {
+                            __m256 out_v = _mm256_loadu_ps(o_row + jj);
+                            out_v = _mm256_fmadd_ps(v_val, _mm256_loadu_ps(w_row + jj), out_v);
+                            _mm256_storeu_ps(o_row + jj, out_v);
+                        }
+                        for (; jj < j_max; ++jj) o_row[jj] += val * w_row[jj];
+                        #else
+                        #pragma omp simd
+                        for (int jj = j0; jj < j_max; ++jj) {
+                            o_row[jj] += val * w_row[jj];
+                        }
+                        #endif
                     }
                 }
             }
