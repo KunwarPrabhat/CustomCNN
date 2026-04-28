@@ -2,7 +2,6 @@
 build/
 bin/
 obj/
-*.csv
 # --- Executables ---
 
 *.exe
