@@ -169,9 +169,8 @@ CustomCNN/
 
 ---
 
-## License
-
-MIT License – see LICENSE file.
+## Licence 
+BSD 3-Clause License - see LICENSE file.
 
 ---
 
